@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-q-watchdog"
+dynamic = ["version"]
+description = "Find the django-q tasks that crashed, timed out or froze, and say which ones."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Pradeep", email = "pradeep.chauhan43@gmail.com" }]
+keywords = ["django", "django-q", "django-q2", "background-tasks", "monitoring", "reliability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Monitoring",
+]
+dependencies = ["Django>=4.2"]
+
+[project.optional-dependencies]
+test = ["django-q2", "pytest>=7", "pytest-django>=4.5"]
+dev = ["django-q-watchdog[test]", "build", "ruff", "twine"]
+
+[project.urls]
+Homepage = "https://github.com/pradeeppc/django-q-watchdog"
+Issues = "https://github.com/pradeeppc/django-q-watchdog/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "django_q_watchdog.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["django_q_watchdog*"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "DJ", "SIM", "C4"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["django_q_watchdog"]
