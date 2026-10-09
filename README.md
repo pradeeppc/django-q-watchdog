@@ -88,6 +88,95 @@ Returns the in-flight tasks and a summary (running, frozen, timed out, lost, que
 It's **staff-only** by default because it names tasks, hosts and tenants. Change who can see it
 with `ACCESS_CHECK`.
 
+Example response, `GET /ops/q-watchdog/`:
+
+```json
+{
+  "summary": {
+    "running": 1,
+    "frozen": 1,
+    "timed_out": 0,
+    "lost": 1,
+    "queued": 0
+  },
+  "tasks": [
+    {
+      "task_id": "1a2b3c4d5e6f47a8b9c0d1e2f3a4b5c6",
+      "name": "kilo-tango-river-seven",
+      "func": "integrations.tasks.sync_employees",
+      "group": null,
+      "tenant": "globex",
+      "host": "worker-1",
+      "process": "Process-1:4",
+      "pid": 4187,
+      "timeout": 600,
+      "started": "2026-10-08T17:55:13.260244+00:00",
+      "last_seen": "2026-10-08T19:24:43.260244+00:00",
+      "rss_mb": 150.2,
+      "rss_start_mb": 150.0,
+      "cpu_seconds": 1.2,
+      "cpu_percent": 0,
+      "status": "frozen",
+      "reason": "waiting: almost no CPU, likely blocked on I/O or a lock",
+      "running_for_seconds": 5400
+    },
+    {
+      "task_id": "7c6b5a4f3e2d41c0b9a8f7e6d5c4b3a2",
+      "name": "ruby-hotel-falcon-two",
+      "func": "documents.tasks.generate_pdf",
+      "group": null,
+      "tenant": "acme",
+      "host": "worker-1",
+      "process": "Process-1:2",
+      "pid": 4179,
+      "timeout": 600,
+      "started": "2026-10-08T19:14:33.260244+00:00",
+      "last_seen": "2026-10-08T19:18:23.260244+00:00",
+      "rss_mb": 1985.7,
+      "rss_start_mb": 190.3,
+      "cpu_seconds": 120.5,
+      "cpu_percent": 98,
+      "status": "lost",
+      "reason": "the worker process died while running it",
+      "running_for_seconds": 640
+    },
+    {
+      "task_id": "9f8b2c1e4d7a4b6c8e0f1a2b3c4d5e6f",
+      "name": "oscar-delta-nine-lemon",
+      "func": "reports.tasks.export_payroll",
+      "group": null,
+      "tenant": "acme",
+      "host": "worker-1",
+      "process": "Process-1:3",
+      "pid": 4182,
+      "timeout": 600,
+      "started": "2026-10-08T19:23:38.260244+00:00",
+      "last_seen": "2026-10-08T19:25:01.260244+00:00",
+      "rss_mb": 212.4,
+      "rss_start_mb": 180.1,
+      "cpu_seconds": 41.0,
+      "cpu_percent": 43,
+      "status": "running",
+      "reason": null,
+      "running_for_seconds": 95
+    }
+  ]
+}
+```
+
+Reading it:
+
+- **`sync_employees` is frozen and waiting.** It has run for 90 minutes on almost no CPU,
+  and its memory hasn't moved. That usually means a call to another system with no timeout.
+- **`generate_pdf` was lost.** Its memory grew from 190 MB to almost 2 GB before the worker
+  died, which points to an out-of-memory kill. It is now also in django-q's Failed tasks.
+- **`export_payroll` is running normally.**
+- `last_seen` is the last heartbeat. `rss_start_mb` and `rss_mb` are the worker's memory when
+  the task started and at the last heartbeat. `cpu_percent` is the task's average CPU use.
+- `tenant` is `null` in projects without django-tenants.
+
+The same data is available from `python manage.py qwatchdog --json`.
+
 ## Multi-tenant projects
 
 With [django-tenants](https://github.com/django-tenants/django-tenants) and
