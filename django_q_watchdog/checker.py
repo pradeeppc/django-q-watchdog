@@ -24,7 +24,6 @@ TIMED_OUT = "timed_out"
 LOST = "lost"
 FINISHED = "finished"  # saved by django-q after all; the record is just cleaned up
 
-FLAT_MEMORY_MB = 1.0
 WAITING_CPU_PERCENT = 5
 
 
@@ -61,19 +60,17 @@ def classify(record, now):
         return LOST, "the worker process died while running it"
 
     frozen_after = conf.get("FROZEN_AFTER_SECONDS")
-    if frozen_after and running_for > frozen_after and _memory_flat(record):
-        if (record.get("cpu_percent") or 0) < WAITING_CPU_PERCENT:
-            return FROZEN, "waiting: almost no CPU, likely blocked on I/O or a lock"
-        return FROZEN, "busy: high CPU with no memory change, possibly looping"
+    if frozen_after and record.get("rss_mb") is not None:
+        # "Frozen" means no memory change for a while, whatever the task did before.
+        # Without a memory reading (not Linux) there's no signal, so nothing is flagged.
+        quiet_for = age(record.get("memory_changed_at") or record.get("started"), now)
+        if quiet_for is not None and quiet_for > frozen_after:
+            cpu_now = record.get("cpu_recent_percent", record.get("cpu_percent")) or 0
+            if cpu_now < WAITING_CPU_PERCENT:
+                return FROZEN, "waiting: almost no CPU, likely blocked on I/O or a lock"
+            return FROZEN, "busy: high CPU with no memory change, possibly looping"
 
     return RUNNING, None
-
-
-def _memory_flat(record):
-    start, current = record.get("rss_start_mb"), record.get("rss_mb")
-    if not isinstance(start, (int, float)) or not isinstance(current, (int, float)):
-        return False
-    return abs(current - start) < FLAT_MEMORY_MB
 
 
 def check(now=None):
@@ -111,7 +108,7 @@ def _alert_once(record, kind, report, level, signal):
     logger.log(
         level,
         "django-q task %s: %s | task %s (%s) | tenant %s | worker %s/%s pid %s | "
-        "ran %ss | rss %s MB | cpu %s%%",
+        "ran %ss | rss %s MB | cpu now %s%%, average %s%%",
         report["status"],
         report["reason"],
         report.get("name"),
@@ -122,6 +119,7 @@ def _alert_once(record, kind, report, level, signal):
         report.get("pid"),
         report["running_for_seconds"],
         report.get("rss_mb"),
+        report.get("cpu_recent_percent"),
         report.get("cpu_percent"),
     )
     signal.send(sender=check, report=report)

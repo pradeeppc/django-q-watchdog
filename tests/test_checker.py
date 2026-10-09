@@ -1,3 +1,4 @@
+import datetime
 import logging
 
 import pytest
@@ -75,8 +76,12 @@ def test_lost_tasks_are_kept_but_not_realerted_when_not_saving_failures(plant, s
     assert not Failure.objects.exists()
 
 
+def ago(seconds):
+    return (timezone.now() - datetime.timedelta(seconds=seconds)).isoformat()
+
+
 def test_frozen_and_waiting(plant, caplog):
-    plant(started_ago=7200, seen_ago=20, rss_start_mb=120.0, rss_mb=120.3, cpu_percent=0)
+    plant(started_ago=7200, seen_ago=20, memory_changed_at=ago(7200), cpu_recent_percent=0)
     with caplog.at_level(logging.WARNING, logger="django_q_watchdog"):
         report = checker.check()[0]
     assert report["status"] == checker.FROZEN
@@ -85,18 +90,50 @@ def test_frozen_and_waiting(plant, caplog):
 
 
 def test_frozen_and_busy(plant):
-    plant(started_ago=7200, seen_ago=20, rss_start_mb=120.0, rss_mb=120.0, cpu_percent=97)
+    plant(started_ago=7200, seen_ago=20, memory_changed_at=ago(7200), cpu_recent_percent=97)
     assert checker.check()[0]["reason"].startswith("busy")
 
 
-def test_a_long_task_that_is_still_working_is_not_frozen(plant):
-    plant(started_ago=7200, seen_ago=20, rss_start_mb=120.0, rss_mb=480.0, cpu_percent=60)
+def test_a_task_that_grew_then_hung_is_frozen(plant):
+    # loaded 300 MB in its first minutes, then stuck for 90 minutes
+    plant(
+        started_ago=6000,
+        seen_ago=20,
+        rss_start_mb=120.0,
+        rss_mb=420.0,
+        memory_changed_at=ago(5400),
+        cpu_recent_percent=0,
+    )
+    report = checker.check()[0]
+    assert report["status"] == checker.FROZEN
+    assert report["reason"].startswith("waiting")
+
+
+def test_recent_cpu_decides_waiting_even_after_busy_work(plant):
+    # averaged 80% CPU over its life, but has used none in the last interval
+    plant(
+        started_ago=7200,
+        seen_ago=20,
+        memory_changed_at=ago(4000),
+        cpu_percent=80,
+        cpu_recent_percent=0,
+    )
+    assert checker.check()[0]["reason"].startswith("waiting")
+
+
+def test_a_long_task_whose_memory_still_moves_is_not_frozen(plant):
+    plant(started_ago=7200, seen_ago=20, memory_changed_at=ago(30), cpu_recent_percent=60)
+    assert statuses() == {"a1b2c3": checker.RUNNING}
+
+
+def test_without_a_memory_reading_nothing_is_flagged_frozen(plant):
+    plant(started_ago=7200, seen_ago=20, rss_mb=None, memory_changed_at=ago(7200))
     assert statuses() == {"a1b2c3": checker.RUNNING}
 
 
 def test_frozen_detection_can_be_turned_off(plant, settings):
     settings.Q_WATCHDOG = {"FROZEN_AFTER_SECONDS": None}
-    plant(started_ago=7200, seen_ago=20, rss_start_mb=120.0, rss_mb=120.0, cpu_percent=0)
+    plant(started_ago=7200, seen_ago=20, memory_changed_at=ago(7200), cpu_recent_percent=0)
     assert statuses() == {"a1b2c3": checker.RUNNING}
 
 
@@ -110,7 +147,7 @@ def test_summary_counts(plant):
 
 
 def test_a_heartbeat_rewriting_the_record_does_not_repeat_the_frozen_alert(plant, caplog):
-    record = plant(started_ago=7200, seen_ago=20, rss_start_mb=120.0, rss_mb=120.0, cpu_percent=0)
+    record = plant(started_ago=7200, seen_ago=20, memory_changed_at=ago(7200), cpu_recent_percent=0)
     with caplog.at_level(logging.WARNING, logger="django_q_watchdog"):
         checker.check()
         store.save(record)  # the worker's next heartbeat writes its own copy of the record

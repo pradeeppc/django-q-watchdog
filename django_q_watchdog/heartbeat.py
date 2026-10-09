@@ -25,6 +25,9 @@ from . import conf, store
 
 logger = logging.getLogger("django_q_watchdog")
 
+# Memory moving by at least this much counts as the task making progress.
+MEMORY_CHANGE_MB = 1.0
+
 _lock = threading.Lock()
 _wake = threading.Event()
 _state = {"current": None, "thread": None}
@@ -64,19 +67,25 @@ def build_record(task):
         "last_seen": now,
         "rss_mb": memory,
         "rss_start_mb": memory,
+        "memory_changed_at": now,
         "cpu_seconds": 0.0,
         "cpu_percent": 0,
+        "cpu_recent_percent": 0,
     }
 
 
 def start(task):
     record = build_record(task)
     store.save(record)
+    cpu, clock = cpu_seconds(), time.monotonic()
     with _lock:
         _state["current"] = {
             "record": record,
-            "cpu_start": cpu_seconds(),
-            "clock_start": time.monotonic(),
+            "cpu_start": cpu,
+            "clock_start": clock,
+            "cpu_last": cpu,
+            "clock_last": clock,
+            "rss_mark": record["rss_mb"],
         }
     _ensure_thread()
 
@@ -93,13 +102,26 @@ def refresh():
             if _state["current"] is current:
                 _state["current"] = None
         return
-    used = max(cpu_seconds() - current["cpu_start"], 0.0)
-    elapsed = time.monotonic() - current["clock_start"]
+    cpu, clock, memory = cpu_seconds(), time.monotonic(), rss_mb()
+    now = timezone.now().isoformat()
+    used = max(cpu - current["cpu_start"], 0.0)
+    elapsed = clock - current["clock_start"]
+    # CPU over the last interval says what the task is doing now; the average since
+    # start can still be high for a task that worked for an hour and then got stuck.
+    recent_used = max(cpu - current["cpu_last"], 0.0)
+    recent_elapsed = clock - current["clock_last"]
+    current["cpu_last"], current["clock_last"] = cpu, clock
+    if memory is not None and (
+        current["rss_mark"] is None or abs(memory - current["rss_mark"]) >= MEMORY_CHANGE_MB
+    ):
+        current["rss_mark"] = memory
+        record["memory_changed_at"] = now
     record.update(
-        last_seen=timezone.now().isoformat(),
-        rss_mb=rss_mb(),
+        last_seen=now,
+        rss_mb=memory,
         cpu_seconds=round(used, 1),
         cpu_percent=round(used / elapsed * 100) if elapsed > 0 else 0,
+        cpu_recent_percent=round(recent_used / recent_elapsed * 100) if recent_elapsed > 0 else 0,
     )
     store.save(record, only_if_present=True)
 

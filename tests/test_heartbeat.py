@@ -56,3 +56,41 @@ def test_a_broken_cache_never_breaks_the_task(monkeypatch, caplog):
     monkeypatch.setattr(store, "save", broken)
     pre_execute.send(sender="django_q", func=None, task=django_q_task())  # must not raise
     assert "could not record task start" in caplog.text
+
+
+def test_refresh_tracks_recent_cpu_and_when_memory_last_moved(monkeypatch):
+    readings = iter(
+        [
+            # start: cpu 10s, clock 100s, rss 200 MB
+            (10.0, 100.0, 200.0),
+            # first refresh: busy (6s CPU in 10s), memory grew 50 MB
+            (16.0, 110.0, 250.0),
+            # second refresh: idle (no CPU), memory moved only 0.3 MB
+            (16.0, 120.0, 250.3),
+        ]
+    )
+    state = {}
+
+    def advance():
+        state["cpu"], state["clock"], state["rss"] = next(readings)
+
+    monkeypatch.setattr(heartbeat, "cpu_seconds", lambda: state["cpu"])
+    monkeypatch.setattr(heartbeat.time, "monotonic", lambda: state["clock"])
+    monkeypatch.setattr(heartbeat, "rss_mb", lambda: state["rss"])
+
+    advance()
+    heartbeat.start(django_q_task())
+    started = store.get("a1b2c3")["memory_changed_at"]
+
+    advance()
+    heartbeat.refresh()
+    first = store.get("a1b2c3")
+    assert first["cpu_recent_percent"] == 60
+    assert first["memory_changed_at"] >= started  # grew by 50 MB: progress
+
+    advance()
+    heartbeat.refresh()
+    second = store.get("a1b2c3")
+    assert second["cpu_recent_percent"] == 0  # idle now
+    assert second["cpu_percent"] == 30  # 6s of CPU over 20s overall
+    assert second["memory_changed_at"] == first["memory_changed_at"]  # 0.3 MB isn't progress

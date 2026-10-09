@@ -14,7 +14,7 @@ you what happened to the ones that never finished:
 | Status | Meaning |
 |---|---|
 | `running` | Heartbeat is fresh. |
-| `frozen` | Running for a long time with no memory change. Reported as **waiting** (almost no CPU: usually a network call or lock with no timeout) or **busy** (high CPU: possibly a loop). |
+| `frozen` | Heartbeat is fresh, but memory hasn't moved for `FROZEN_AFTER_SECONDS`. Reported as **waiting** (almost no CPU: usually a network call or lock with no timeout) or **busy** (high CPU: possibly a loop). |
 | `timed_out` | The worker was killed by django-q's timeout. |
 | `lost` | The worker process died while running the task. |
 
@@ -110,12 +110,14 @@ Example response, `GET /ops/q-watchdog/`:
       "process": "Process-1:4",
       "pid": 4187,
       "timeout": 600,
-      "started": "2026-10-08T17:55:13.260244+00:00",
-      "last_seen": "2026-10-08T19:24:43.260244+00:00",
+      "started": "2026-10-09T03:43:59.735551+00:00",
+      "last_seen": "2026-10-09T05:13:29.735551+00:00",
       "rss_mb": 150.2,
       "rss_start_mb": 150.0,
+      "memory_changed_at": "2026-10-09T03:44:29.735551+00:00",
       "cpu_seconds": 1.2,
       "cpu_percent": 0,
+      "cpu_recent_percent": 0,
       "status": "frozen",
       "reason": "waiting: almost no CPU, likely blocked on I/O or a lock",
       "running_for_seconds": 5400
@@ -130,12 +132,14 @@ Example response, `GET /ops/q-watchdog/`:
       "process": "Process-1:2",
       "pid": 4179,
       "timeout": 600,
-      "started": "2026-10-08T19:14:33.260244+00:00",
-      "last_seen": "2026-10-08T19:18:23.260244+00:00",
+      "started": "2026-10-09T05:03:19.735551+00:00",
+      "last_seen": "2026-10-09T05:07:09.735551+00:00",
       "rss_mb": 1985.7,
       "rss_start_mb": 190.3,
+      "memory_changed_at": "2026-10-09T05:07:09.735551+00:00",
       "cpu_seconds": 120.5,
-      "cpu_percent": 98,
+      "cpu_percent": 52,
+      "cpu_recent_percent": 98,
       "status": "lost",
       "reason": "the worker process died while running it",
       "running_for_seconds": 640
@@ -150,12 +154,14 @@ Example response, `GET /ops/q-watchdog/`:
       "process": "Process-1:3",
       "pid": 4182,
       "timeout": 600,
-      "started": "2026-10-08T19:23:38.260244+00:00",
-      "last_seen": "2026-10-08T19:25:01.260244+00:00",
+      "started": "2026-10-09T05:12:24.735551+00:00",
+      "last_seen": "2026-10-09T05:13:47.735551+00:00",
       "rss_mb": 212.4,
       "rss_start_mb": 180.1,
+      "memory_changed_at": "2026-10-09T05:13:47.735551+00:00",
       "cpu_seconds": 41.0,
       "cpu_percent": 43,
+      "cpu_recent_percent": 51,
       "status": "running",
       "reason": null,
       "running_for_seconds": 95
@@ -172,7 +178,10 @@ Reading it:
   died, which points to an out-of-memory kill. It is now also in django-q's Failed tasks.
 - **`export_payroll` is running normally.**
 - `last_seen` is the last heartbeat. `rss_start_mb` and `rss_mb` are the worker's memory when
-  the task started and at the last heartbeat. `cpu_percent` is the task's average CPU use.
+  the task started and at the last heartbeat, and `memory_changed_at` is when it last moved
+  by 1 MB or more.
+- `cpu_recent_percent` is CPU use since the previous heartbeat, which says what the task is
+  doing now. `cpu_percent` is the average since it started.
 - `tenant` is `null` in projects without django-tenants.
 
 The same data is available from `python manage.py qwatchdog --json`.
@@ -211,8 +220,10 @@ works on any platform.
   updates a record that still exists, so a finished task is never brought back.
 - **When django-q saves the task** (success or failure), the record is deleted.
 - **The check** looks at what's left: a record whose heartbeat stopped belongs to a worker that
-  died or was killed; a record still refreshing but unchanged for an hour belongs to a frozen
-  task.
+  died or was killed; a record still refreshing but whose memory hasn't moved for an hour
+  belongs to a frozen task. Whether it's waiting or busy is decided by its CPU use since the
+  previous heartbeat, not its average, so a task that worked hard and then got stuck is
+  reported as waiting.
 
 Tested end to end against a real cluster, by killing worker processes and letting tasks hang
 past the timeout, on django-q 1.3.9 with Django 4.2 and on django-q2 with Django 5.2.
